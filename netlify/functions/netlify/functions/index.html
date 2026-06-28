@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EVtronics Enpower — MC3336-7240</title>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fff; font-family: system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
+    #root { max-width: 820px; margin: 0 auto; }
+    #cargando { padding: 40px 16px; text-align: center; color: #9ca3af; font-size: 14px; }
+    #err { display:none; padding:16px; margin:16px; background:#fef2f2; border:1px solid #fecaca;
+           border-radius:8px; color:#b91c1c; white-space:pre-wrap; font-size:13px; font-family:monospace; }
+  </style>
+</head>
+<body>
+  <div id="root"><div id="cargando">Cargando EVtronics Enpower…</div></div>
+  <pre id="err"></pre>
+  <script>
+    function showErr(msg){
+      var e = document.getElementById('err');
+      var c = document.getElementById('cargando');
+      if (c) c.style.display = 'none';
+      e.style.display = 'block';
+      e.textContent = 'No se pudo iniciar la app:\n\n' + msg;
+    }
+    window.addEventListener('error', function(ev){
+      showErr((ev.message || ev.error || ev) + (ev.filename ? '\n(' + ev.filename + ':' + ev.lineno + ')' : ''));
+    });
+    window.addEventListener('unhandledrejection', function(ev){
+      showErr('Promesa rechazada: ' + (ev.reason && ev.reason.message ? ev.reason.message : ev.reason));
+    });
+    setTimeout(function(){
+      if (!window.React || !window.Babel) {
+        showErr('No se cargaron las librerías desde el CDN (React/Babel). Verificá la conexión a internet y recargá la página.');
+      }
+    }, 8000);
+  </script>
+  <script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect } = React;
+
+const PARAMS = [
+  {id:'F0',name:'Tipo de Motor',range:'0~3',grp:'F0',ro:false,warn:true,desc:'Selecciona el tipo de motor AC conectado al controlador.',eff:'Afecta TODOS los algoritmos de control. Cambiar incorrectamente causa comportamiento errático o daño irreversible al motor.',note:'0=Asíncrono (inducción) · 1=Síncrono PM · 2=Reluctancia · 3=Exc. separada'},
+  {id:'F1',name:'Potencia Nominal del Motor',range:'0~150.0 kW',grp:'F0',ro:false,desc:'Potencia nominal del motor según su placa de datos.',eff:'Afecta límites de corriente y protección térmica. Valor menor al real limita la potencia; mayor puede eliminar protecciones.'},
+  {id:'F2',name:'Voltaje Nominal del Motor',range:'0~400.0 V',grp:'F0',ro:false,warn:true,desc:'Voltaje nominal del motor (NO el voltaje de la batería). Según placa del motor.',eff:'Parámetro crítico. Afecta el cálculo de flux magnético. Incorrecto puede sobrecalentar el motor o reducir la potencia.'},
+  {id:'F3',name:'Corriente Nominal del Motor',range:'10.0~600.0 A',grp:'F0',ro:false,desc:'Corriente nominal del motor según su placa de datos.',eff:'Define el punto de referencia para protecciones de sobrecorriente. Muy alto = sin protección; muy bajo = potencia limitada.'},
+  {id:'F4',name:'Frecuencia Nominal del Motor',range:'10.0~300.0 Hz',grp:'F0',ro:false,desc:'Frecuencia base a la que el motor opera a su voltaje y velocidad nominales.',eff:'Determina la velocidad base. Afecta la relación V/Hz y el control vectorial FOC.'},
+  {id:'F5',name:'Frecuencia Máxima del Motor',range:'10.0~400.0 Hz',grp:'F0',ro:false,desc:'Frecuencia máxima de salida del controlador al motor.',eff:'Determina la velocidad máxima absoluta. Aumentar permite mayor velocidad pero puede dañar el motor si excede su diseño mecánico.'},
+  {id:'F6',name:'Velocidad Nominal del Motor',range:'100~6000 rpm',grp:'F0',ro:false,desc:'RPM del motor a la frecuencia nominal (F4). Según placa del motor.',eff:'Junto con F4 calcula el número de polos y calibra el control de velocidad.'},
+  {id:'F7',name:'Límite de Velocidad Máxima',range:'0~9000 rpm',grp:'F0',ro:false,desc:'RPM máximas permitidas en marcha adelante. Funciona como regulador de velocidad.',eff:'Reducir para limitar la velocidad del vehículo. Aumentar para mayor velocidad (no superar capacidad del motor).'},
+  {id:'F8',name:'Corriente en Vacío — Asíncrono',range:'15~45 %',grp:'F0',ro:false,desc:'Porcentaje de corriente nominal que el motor consume sin carga para generar el campo magnético.',eff:'Muy alto = mayor consumo en ralentí. Muy bajo = reduce capacidad de torque. Usar valor de la hoja técnica del motor.'},
+  {id:'F9',name:'Constante de Tiempo del Rotor 1',range:'0~10000',grp:'F0',ro:false,desc:'Primera constante de tiempo del rotor para el control vectorial FOC.',eff:'Afecta precisión de velocidad y torque. Un valor incorrecto produce oscilaciones. Ajustar solo con datos técnicos del motor.'},
+  {id:'F10',name:'Constante de Tiempo del Rotor 2',range:'0~10000',grp:'F0',ro:false,desc:'Segunda constante de tiempo del rotor, activa en el rango de frecuencia definido por F11.',eff:'Mejora el rendimiento en alta velocidad. Compensa variación térmica del rotor junto con F9 y F11.'},
+  {id:'F11',name:'Frecuencia de Cambio de Constante',range:'0~100.0 Hz',grp:'F0',ro:false,desc:'Frecuencia donde el controlador cambia de usar F9 a F10 como constante de tiempo.',eff:'Optimizar si hay inestabilidad a cierta velocidad específica.'},
+  {id:'F12',name:'Pulsos por Revolución — Encoder (PPR)',range:'1~10000',grp:'F0',ro:false,warn:true,desc:'Número de pulsos que el encoder genera por revolución completa del motor.',eff:'CRÍTICO — debe coincidir exactamente con el encoder instalado. Valor incorrecto produce velocidades erróneas o pérdida de control.',note:'Verificar en la etiqueta del encoder antes de modificar'},
+  {id:'F13',name:'Dirección del Encoder',range:'0~1',grp:'F0',ro:false,desc:'Invierte la lectura de dirección del encoder del motor.',eff:'Soluciona el movimiento en sentido contrario sin cambiar cableado físico. Probar ANTES de intercambiar fases.',note:'0=Normal · 1=Invertido'},
+  {id:'F14',name:'Ángulo Inicial de Campo Magnético',range:'0~360.0°',grp:'F0',ro:false,desc:'Ángulo inicial del campo magnético — solo para motores síncronos PM (F0=1).',eff:'Solo aplica en motores síncronos. Un valor incorrecto impide el arranque o produce vibraciones severas.'},
+  {id:'F15',name:'Indicador de Dirección de Marcha',range:'0~3',grp:'F0',ro:false,desc:'Configura la relación entre la señal Forward/Reverse y el sentido de giro del motor.',eff:'Primera opción para corregir dirección invertida. Cambiar ANTES de invertir fases físicamente.',note:'0=Forward normal · 1=Forward invertido · 2~3=Modos alternativos'},
+  {id:'F16',name:'Límite de Velocidad Secundaria',range:'100~9000 rpm',grp:'F0',ro:false,desc:'Velocidad máxima reducida cuando se activa una entrada secundaria (modo tortuga).',eff:'Permite crear zona de baja velocidad para maniobras o zonas de seguridad.'},
+  {id:'F17',name:'Versión de Firmware',range:'—',grp:'F0',ro:true,desc:'Versión del firmware instalado en el controlador.',eff:'Solo lectura. Informar este número al solicitar soporte técnico o actualizaciones.'},
+  {id:'F18',name:'Aceleración Inicial',range:'10~40000',grp:'F1',ro:false,desc:'Rampa de aceleración en el primer instante de arranque (baja velocidad).',eff:'Alto = arranque brusco. Bajo = arranque suave. Afecta confort y estrés mecánico en la transmisión.'},
+  {id:'F19',name:'Segunda Aceleración — Rampa Normal',range:'100~40000',grp:'F1',ro:false,desc:'Rampa de aceleración principal durante la operación normal de marcha.',eff:'Controla la suavidad de aceleración. Reducir para aceleración más suave y eficiente en batería.'},
+  {id:'F20',name:'Aceleración en Reversa',range:'100~40000',grp:'F1',ro:false,desc:'Rampa de aceleración cuando el vehículo está en reversa.',eff:'Generalmente más bajo que la aceleración normal por seguridad en maniobras.'},
+  {id:'F21',name:'Desaceleración Libre (Regenerativa)',range:'10~40000',grp:'F1',ro:false,warn:true,desc:'Rampa de desaceleración al soltar el acelerador sin presionar el freno.',eff:'0 = sin frenado regenerativo (rueda libre). Aumentar para recuperar más energía y frenar al soltar el acelerador.',note:'⚠ Valor 0 = el vehículo rueda libre al soltar — sin freno regenerativo activo'},
+  {id:'F22',name:'Desaceleración con Freno Activo',range:'100~40000',grp:'F1',ro:false,desc:'Rampa de desaceleración al presionar el freno (frenado regenerativo activo).',eff:'Aumentar para freno más enérgico y mayor recuperación de energía al usar el freno.'},
+  {id:'F23',name:'KP de Velocidad — Proporcional',range:'100~40000',grp:'F1',ro:false,desc:'Ganancia proporcional del regulador PID de velocidad.',eff:'Aumentar mejora la respuesta pero puede causar oscilaciones. Reducir si hay inestabilidad o vibración a velocidad constante.'},
+  {id:'F24',name:'KI de Velocidad — Integral',range:'0~20000',grp:'F1',ro:false,desc:'Ganancia integral del regulador PID de velocidad.',eff:'Elimina el error estático de velocidad. Valores muy altos causan sobreoscilación. Ajustar junto con F23.'},
+  {id:'F25',name:'Reservado 1',range:'0~32767',grp:'F1',ro:false,desc:'Parámetro reservado para uso interno del fabricante.',eff:'No modificar sin indicación de Inpower/Enpower.'},
+  {id:'F26',name:'Tiempo de Freno al Soltar Acelerador',range:'0~30.0 s',grp:'F1',ro:false,desc:'Retardo antes de activar el freno regenerativo al soltar el acelerador.',eff:'0.0 = frenado inmediato al soltar. Aumentar para transición más suave entre aceleración y frenado.'},
+  {id:'F27',name:'Filtro de Velocimetría',range:'0~7',grp:'F1',ro:false,desc:'Coeficiente de filtro para la señal de velocidad del encoder.',eff:'0 = sin filtro (máxima respuesta). 7 = máximo suavizado (mayor retardo). Aumentar si hay velocidad inestable por ruido eléctrico.'},
+  {id:'F28',name:'Auto-aprendizaje Posición de Arranque',range:'0~7',grp:'F1',ro:false,desc:'Método de identificación de la posición inicial del rotor al arrancar.',eff:'Principalmente para motores síncronos PM. Si el motor tiene sacudidas al arrancar, ajustar este parámetro.'},
+  {id:'F29',name:'SOC de Batería',range:'0~100 %',grp:'F1',ro:false,desc:'Estado de carga de la batería. Si conectado a BMS, refleja el SOC real.',eff:'Ajustar manualmente si el indicador del tablero no coincide con el estado real de las baterías.'},
+  {id:'F30',name:'Límite de Torque en Ralentí',range:'0~400 %',grp:'F1',ro:false,desc:'Torque máximo cuando el motor opera en baja velocidad o ralentí.',eff:'Ajustar si hay sacudidas o falta de fuerza al arrancar en pendiente o desde detenido.'},
+  {id:'F31',name:'Coeficiente de División de Pulsos',range:'1~256.0',grp:'F1',ro:false,desc:'Factor de división de pulsos del encoder para configuraciones especiales.',eff:'Normalmente en 0. Modificar solo para encoders con resolución no estándar.'},
+  {id:'F32',name:'RPM de Activación de Freno Auxiliar',range:'0~1500 rpm',grp:'F1',ro:false,desc:'Velocidad por debajo de la cual se activa el freno auxiliar o electromagnético.',eff:'0 = freno auxiliar desactivado. Configurar para vehículos con freno de parque electromagnético.'},
+  {id:'F33',name:'KP de Torque — Proporcional',range:'100~40000',grp:'F2',ro:false,desc:'Ganancia proporcional del regulador PID de torque (lazo interno de corriente).',eff:'Aumentar mejora la respuesta de torque. Excesivo causa ruido eléctrico o inestabilidad. Reducir si hay vibraciones acústicas.'},
+  {id:'F34',name:'KI de Torque — Integral',range:'0~20000',grp:'F2',ro:false,desc:'Ganancia integral del regulador PID de torque.',eff:'Elimina error estático de torque. Trabajar junto con F33. Muy alto puede causar oscilaciones de corriente.'},
+  {id:'F35',name:'KP de Magnetización — Proporcional',range:'100~40000',grp:'F2',ro:false,warn:true,desc:'Ganancia proporcional del regulador de magnetización (flujo magnético) del motor asíncrono.',eff:'Un valor de 0 está fuera del rango mínimo (100) y puede reducir eficiencia y torque disponible.',note:'⚠ Valor actual 0 fuera de rango mínimo. Revisar si fue reseteado accidentalmente.'},
+  {id:'F36',name:'KI de Magnetización — Integral',range:'0~20000',grp:'F2',ro:false,desc:'Ganancia integral del regulador de magnetización.',eff:'Mantiene el flujo magnético estable bajo diferentes cargas y velocidades. Ajustar junto con F35.'},
+  {id:'F37',name:'Límite de Torque de Tracción',range:'0~400 %',grp:'F2',ro:false,desc:'Torque máximo permitido en modo de propulsión (avance/reversa).',eff:'Reducir para proteger la transmisión. Aumentar para más potencia de aceleración.'},
+  {id:'F38',name:'Límite de Torque de Frenado Regenerativo',range:'0~400 %',grp:'F2',ro:false,desc:'Torque máximo de frenado regenerativo al desacelerar.',eff:'Bajo = freno suave, menos recuperación de energía. Alto = freno más enérgico, mayor recuperación.'},
+  {id:'F39',name:'Coeficiente de Corrección de Voltaje',range:'90~110 %',grp:'F2',ro:false,desc:'Factor de calibración del sensor interno de voltaje del controlador.',eff:'100% = sin corrección. Ajustar si F53 muestra voltaje diferente al medido con multímetro en B+ y B-.'},
+  {id:'F40',name:'Coeficiente de Corrección de Corriente',range:'50~200 %',grp:'F2',ro:false,desc:'Factor de calibración del sensor interno de corriente.',eff:'100% = sin corrección. Ajustar si F49 difiere de una medición externa de corriente.'},
+  {id:'F41',name:'Umbral de Bajo Voltaje (Undervoltage)',range:'0~1000 V',grp:'F2',ro:false,warn:true,desc:'Voltaje mínimo de batería. El controlador desconecta si cae por debajo de este valor.',eff:'Protege baterías de descarga profunda. LiFePO4 72V → 60-63V. Plomo-ácido → 63V típico.',note:'Ajustar según el tipo de batería instalada'},
+  {id:'F42',name:'Umbral de Sobrevoltaje (Overvoltage)',range:'50~1000 V',grp:'F2',ro:false,warn:true,desc:'Voltaje máximo permitido. El controlador desconecta si supera este valor.',eff:'Protege durante frenado regenerativo intenso. Sistema 72V LiFePO4 → 84-88V típico.',note:'Ajustar según voltaje máximo de carga de las baterías'},
+  {id:'F43',name:'Parámetro de Fábrica 1',range:'0~65535',grp:'F2',ro:false,desc:'Parámetro reservado para configuración interna del fabricante.',eff:'No modificar sin indicación directa de Inpower/Enpower.'},
+  {id:'F44',name:'Modo de Control',range:'0~7',grp:'F2',ro:false,warn:true,desc:'Selecciona el algoritmo de control del motor. 0=Control vectorial con sensor encoder.',eff:'Cambia fundamentalmente cómo el controlador maneja el motor. No modificar sin conocer exactamente cada modo.',note:'0=Vector con encoder (default MC3336)'},
+  {id:'F45',name:'Límite de Torque a Alta Velocidad',range:'0~400 %',grp:'F2',ro:false,desc:'Torque máximo en zona de debilitamiento de campo (alta velocidad).',eff:'Reducir si hay inestabilidad a alta velocidad. Limita la potencia en zona de campo debilitado.'},
+  {id:'F46',name:'Voltaje de Reducción de Potencia',range:'0~32767',grp:'F2',ro:false,desc:'Voltaje de batería a partir del cual el controlador reduce gradualmente la potencia de salida.',eff:'Crea zona de transición suave antes del corte por bajo voltaje (F41). Ej: F41=63V → F46=65V.'},
+  {id:'F47',name:'RPM en Modo Bajo Consumo',range:'0~32767 rpm',grp:'F2',ro:false,desc:'Velocidad máxima cuando el voltaje cae bajo F46 (modo batería baja).',eff:'Permite que el vehículo llegue a su destino con velocidad y consumo reducidos cuando la batería está baja.'},
+  {id:'F48',name:'Velocidad Máxima en Reversa',range:'0~32767 rpm',grp:'F2',ro:false,desc:'Límite máximo de RPM cuando el vehículo está en reversa.',eff:'Limitar por seguridad en maniobras. Recomendado: 50-60% de la velocidad de avance.'},
+  {id:'F49',name:'Corriente de Salida',range:'A',grp:'F3',ro:true,desc:'Corriente RMS de salida del controlador al motor en tiempo real.',eff:'Solo lectura. Si supera F3 constantemente, revisar la carga mecánica del motor.'},
+  {id:'F50',name:'Velocidad del Motor',range:'rpm',grp:'F3',ro:true,desc:'Velocidad de rotación actual del motor medida por el encoder.',eff:'Solo lectura. Si es inconsistente con lo esperado, revisar encoder y F12.'},
+  {id:'F51',name:'Temperatura del Controlador',range:'°C',grp:'F3',ro:true,desc:'Temperatura interna del módulo de potencia del controlador.',eff:'Solo lectura. Normal <60°C. Advertencia 60-80°C. Crítico >80°C → derating o desconexión.'},
+  {id:'F52',name:'Temperatura del Motor',range:'°C',grp:'F3',ro:true,desc:'Temperatura del motor medida por sensor NTC en el bobinado.',eff:'Solo lectura. Si no hay sensor NTC instalado puede mostrar valor fijo. Normal <80°C.'},
+  {id:'F53',name:'Voltaje del Paquete de Baterías',range:'V ×0.1',grp:'F3',ro:true,desc:'Voltaje actual de la batería. Valor mostrado ÷ 10 = voltaje real. (Ej: 792 = 79.2V)',eff:'Solo lectura. Verificar que coincide con multímetro directo en B+ y B-. Si difiere, ajustar F39.'},
+  {id:'F54',name:'Código de Falla Activa',range:'—',grp:'F3',ro:true,desc:'Código numérico de la última falla detectada. 0 = sin falla activa.',eff:'Solo lectura. Consultar la pestaña Diagnóstico para interpretar el código. Fundamental para diagnóstico.'},
+  {id:'F55',name:'Reservado 1 — Interno',range:'—',grp:'F3',ro:true,desc:'Parámetro interno del fabricante.',eff:'Solo lectura.'},
+  {id:'F56',name:'Reservado 2 — Interno',range:'—',grp:'F3',ro:true,desc:'Parámetro interno del fabricante.',eff:'Solo lectura.'},
+  {id:'F57',name:'Reservado 3 — Interno',range:'—',grp:'F3',ro:true,desc:'Parámetro interno del fabricante.',eff:'Solo lectura.'},
+];
+
+const BEEPS = [
+  {seq:'1 pitido corto',pat:[1],sev:'ok',meaning:'Sistema energizado correctamente — sin fallas activas.',action:'Normal. El controlador arrancó correctamente. No se requiere acción.',fcode:'F54 = 0'},
+  {seq:'2 pitidos',pat:[1,1],sev:'warning',meaning:'Señal del acelerador fuera de rango / Error de calibración.',action:'Medir voltaje en el pin de señal del acelerador con multímetro DC. Reposo: 0.8-1.0V. Máximo: 4.0-4.7V. Fuera de ese rango activa esta alerta. Verificar cableado y sensor Hall.',fcode:'F54 = 2'},
+  {seq:'3 pitidos',pat:[1,1,1],sev:'critical',meaning:'Falla del tubo de potencia (IGBT) — posible cortocircuito interno.',action:'Apagar inmediatamente. Medir resistencia entre fases U-V, V-W, U-W del motor con el sistema apagado. Si el motor está bien, el IGBT interno puede estar dañado. Requiere reparación del controlador.',fcode:'F54 = 3'},
+  {seq:'4 pitidos',pat:[1,1,1,1],sev:'warning',meaning:'Sobretemperatura del controlador (> 80°C).',action:'Verificar F51 en tiempo real. Revisar ventilación del compartimento, carga excesiva o ambiente caliente. Esperar que enfríe antes de reiniciar.',fcode:'F54 = 4'},
+  {seq:'5 pitidos',pat:[1,1,1,1,1],sev:'warning',meaning:'Error del encoder — señal incorrecta, ausente o PPR no coincide.',action:'Verificar alimentación 5V del encoder. Con osciloscopio Micsig verificar señales A y B al girar el motor manualmente. Revisar que F12 (PPR) coincida exactamente con el encoder instalado.',fcode:'F54 = 5'},
+  {seq:'6 pitidos',pat:[1,1,1,1,1,1],sev:'warning',meaning:'Error de secuencia de fases del motor (U/V/W incorrectas).',action:'Probar primero cambiando F15 o F13 antes de tocar el cableado físico. Si se intercambian dos fases, verificar que F13 siga en sincronía con el encoder.',fcode:'F54 = 6'},
+  {seq:'1 largo + 3 cortos',pat:[3,1,1,1],sev:'critical',meaning:'Falla crítica del módulo de potencia — IGBT dañado.',action:'Apagar inmediatamente. Esta secuencia confirma falla interna del módulo de potencia. Revisar daños físicos. Generalmente requiere reemplazo del controlador.',fcode:'F54 = 13'},
+  {seq:'Pitido continuo',pat:[8],sev:'critical',meaning:'Falla catastrófica — cortocircuito o sobrecorriente instantánea.',action:'Desconectar batería inmediatamente. Revisar cortocircuito entre B+ y B- o entre fases U/V/W del motor.',fcode:'F54 = 99'},
+];
+
+const FAULTS = [
+  {id:'F001',name:'Bajo Voltaje de Batería',cat:'Batería',sev:'warning',fcode:'F54=1 · 2 pitidos',
+   pins:[{pin:'B+ (terminal positivo de potencia)',sig:'DC continuo',ref:'>63V (configurable en F41)',test:'Medir entre B+ y B- con multímetro DC. Comparar con F53÷10.'},{pin:'B- (terminal negativo)',sig:'GND referencia',ref:'0V',test:'Verificar continuidad del cable de retorno negativo.'}],
+   steps:['Leer F53 en tiempo real → valor ÷ 10 = voltaje real. (Ej: F53=792 → 79.2V).','Medir con multímetro DC entre terminales B+ y B- del controlador.','Si multímetro ≠ F53÷10 por más de 2V: ajustar F39 (corrección de voltaje).','Si voltaje real es bajo: verificar estado del paquete de baterías y BMS.','Si voltaje es normal pero hay falla: verificar valor de F41 según el tipo de batería instalada.'],
+   ref:{normal:'>63V en sistema 72V / >85V en sistema 96V',warning:'63V - 65V (zona de reducción — F46)',fault:'<F41 → controlador desconecta'}},
+  {id:'F002',name:'Sobrevoltaje de Batería',cat:'Batería',sev:'warning',fcode:'F54=2',
+   pins:[{pin:'B+ / B-',sig:'DC continuo',ref:'<90V típico en sistema 72V LiFePO4',test:'Medir en B+ y B- con batería al 100% de carga y durante frenado regenerativo.'}],
+   steps:['Medir voltaje en B+ y B- con batería al 100% de carga.','Verificar que el BMS tiene protección de sobrevoltaje activa.','Si ocurre solo durante frenado regenerativo: reducir F38 (límite torque frenado) o ajustar F42.','Verificar que F42 sea correcto para el sistema (72V LiFePO4: máximo 84-88V).'],
+   ref:{normal:'<88V en sistema 72V LiFePO4',warning:'88V - 92V',fault:'>F42 → controlador desconecta'}},
+  {id:'F003',name:'Error de Señal del Acelerador',cat:'Sensores',sev:'warning',fcode:'F54=3 · 2 pitidos',
+   pins:[{pin:'Pin señal del acelerador',sig:'Analógico 0~5V (Hall) o resistivo',ref:'Reposo: 0.8-1.0V · Máximo: 4.0-4.7V',test:'Multímetro DC entre pin señal y GND. Verificar rango en reposo y a fondo.'},{pin:'Pin alimentación (Vcc)',sig:'DC 5V',ref:'5.0V ±0.2V',test:'Medir entre Vcc y GND del sensor Hall.'},{pin:'Pin GND del acelerador',sig:'Tierra de señal',ref:'0V',test:'Continuidad hasta GND del controlador.'}],
+   steps:['Con multímetro DC, medir entre pin de señal del acelerador y GND.','Sin presionar acelerador: debe leer 0.8V a 1.0V (tipo Hall) o 0V (tipo resistivo).','Con acelerador al máximo: debe leer 4.0V a 4.7V.','Si lee 0V en reposo: verificar alimentación de 5V al sensor Hall.','Si lee >5V o <0V: posible cortocircuito o sensor dañado.','Verificar continuidad del cableado entre el acelerador y el conector del controlador.'],
+   ref:{normal:'0.8V (reposo) → 4.7V (máximo)',warning:'<0.5V o >4.8V estático',fault:'0V fijo o 5V fijo → sensor abierto o cortocircuito'}},
+  {id:'F004',name:'Error del Encoder del Motor',cat:'Sensores',sev:'warning',fcode:'F54=4 · 5 pitidos',
+   pins:[{pin:'Encoder VCC',sig:'DC 5V',ref:'5.0V ±0.2V',test:'Medir entre VCC y GND del encoder.'},{pin:'Encoder GND',sig:'Tierra',ref:'0V',test:'Continuidad hasta GND del controlador.'},{pin:'Canal A',sig:'Digital 0~5V cuadratura',ref:'Pulsos 0-5V al girar',test:'Con osciloscopio Micsig: señal cuadrada limpia 0-5V al girar manualmente.'},{pin:'Canal B',sig:'Digital 0~5V cuadratura',ref:'90° desfasado respecto a A',test:'Desfase de 90° con canal A confirma dirección y funcionamiento correcto.'}],
+   steps:['Medir voltaje entre VCC y GND del encoder: debe ser exactamente 5.0V ±0.2V.','Girar el motor a mano lentamente y medir señal A: debe alternar entre 0V y 5V.','Con osciloscopio: verificar que A y B estén desfasados 90° entre sí.','Verificar que F12 (PPR) coincide exactamente con el encoder instalado (revisar etiqueta).','Si señales correctas pero falla persiste: cambiar F13 (dirección del encoder).','Si no hay señal: verificar continuidad de cada hilo del cable encoder hasta el controlador.'],
+   ref:{normal:'5V alimentación · pulsos limpios 0-5V en A y B desfasados 90°',warning:'Señales con ruido o amplitud <4V',fault:'Sin señal en A o B, o VCC <4.5V'}},
+  {id:'F005',name:'Falla de IGBT / Tubo de Potencia',cat:'Controladora',sev:'critical',fcode:'F54=5 · 3 pitidos · 1L+3C',
+   pins:[{pin:'U / V / W (fases del motor)',sig:'Resistencia de bobinas',ref:'U-V = V-W = U-W (equilibradas, 0.5-5Ω típico)',test:'Medir con multímetro en Ω. Sistema COMPLETAMENTE APAGADO y batería desconectada.'},{pin:'B+ → fases (prueba IGBT)',sig:'Modo diodo',ref:'Caída de diodo 0.3-0.7V entre B+ y cada fase',test:'Multímetro en modo diodo: positivo en B+, negativo en U, V, W por separado.'}],
+   steps:['APAGAR completamente y desconectar batería ANTES de cualquier medición.','Medir resistencia U-V, V-W, U-W del motor: deben ser iguales entre sí.','Si alguna medición es 0Ω: cortocircuito en bobinas del motor — revisar motor.','Si el motor está bien: posible IGBT dañado en el controlador.','Con multímetro en modo diodo: B+ positivo a cada fase (U,V,W). Debe marcar ~0.5V en cada una.','Si mide 0V (cortocircuito) o infinito (abierto) en alguna fase: IGBT dañado.'],
+   ref:{normal:'Resistencia balanceada entre fases + caída diodo correcta ~0.5V',warning:'Desequilibrio >10% entre fases',fault:'0Ω entre fases o entre fase y B+ → cortocircuito'}},
+  {id:'F006',name:'Sobretemperatura del Controlador',cat:'Temperatura',sev:'warning',fcode:'F54=6 · 4 pitidos',
+   pins:[{pin:'Sensor NTC interno (no accesible)',sig:'Resistencia NTC interna',ref:'~10kΩ a 25°C / ~1.5kΩ a 80°C',test:'Leer F51 en tiempo real. Sensor NTC interno no es accesible directamente.'},{pin:'Pin sensor NTC del motor',sig:'Resistencia NTC externo',ref:'10kΩ a 25°C (temperatura ambiente)',test:'Desconectar conector NTC del motor y medir resistencia con multímetro en kΩ.'}],
+   steps:['Leer F51 (temperatura controladora) y F52 (temperatura motor) en tiempo real.','Si F51 > 75°C: verificar ventilación del compartimento del controlador.','Si F52 muestra valor anormal (0°C o >120°C sin razón): revisar sensor NTC del motor.','Para verificar NTC del motor: desconectar y medir resistencia a temperatura ambiente (~10kΩ).','Verificar que el controlador no esté en zona sin flujo de aire o en contacto con superficies calientes.','Reducir la carga del motor o mejorar la ventilación del compartimento.'],
+   ref:{normal:'F51 <60°C · F52 <70°C',warning:'F51: 60-80°C · F52: 70-100°C',fault:'F51 >80°C o F52 >120°C → reducción de potencia o desconexión'}},
+  {id:'F007',name:'Dirección Invertida del Motor',cat:'Configuración',sev:'info',fcode:'Sin código en F54 — síntoma físico',
+   pins:[{pin:'U / V / W (fases del motor)',sig:'Secuencia de fases AC trifásica',ref:'Secuencia correcta según especificación del motor',test:'Intercambiar dos fases (U↔V) SOLO si F13 y F15 no resuelven el problema.'}],
+   steps:['Primero: cambiar F15 (Dirección de marcha) de 1 → 0 y probar. Si funciona, no tocar nada más.','Si F15 no resuelve: cambiar F13 (Dirección del encoder) de 1 → 0 y probar.','Si ningún parámetro resuelve: APAGAR y desconectar batería.','Con el sistema apagado: intercambiar dos cables de fase (U ↔ V en conector del motor).','Después del cambio físico: verificar que F13 siga en sincronía con la dirección real del encoder.','Probar a baja velocidad y confirmar dirección correcta antes de prueba a velocidad normal.'],
+   ref:{normal:'Forward = avance hacia adelante',warning:'N/A',fault:'Forward = retroceso → fases invertidas o F13/F15 incorrecto'}},
+  {id:'F008',name:'Sin Comunicación con Software PC',cat:'Comunicación',sev:'info',fcode:'Error en software — Port not valid',
+   pins:[{pin:'Conector SCI (3 pines triangular)',sig:'RS232 serial asíncrono',ref:'TX reposo: -5V a -12V (lógica invertida RS232)',test:'Con osciloscopio: verificar pulsos en TX al intentar conectar desde el software.'},{pin:'Cable USB-RS232 → PC',sig:'USB-Serial adaptador',ref:'Driver COM port visible en Administrador de Dispositivos',test:'Verificar que el COM port aparece en Windows y seleccionarlo en el software Inpower.'}],
+   steps:['Verificar que el cable USB-RS232 está conectado y el driver instalado (Administrador de dispositivos de Windows).','Encender el controlador (llave en ON) ANTES de abrir el software Inpower.','En el software: seleccionar el COM port correcto.','Si el antivirus bloquea el ejecutable: agregar excepción en Windows Defender para la carpeta del programa.','Verificar que el conector SCI del controlador tiene los 3 pines sin daño ni corrosión.','Si el software se cierra al conectar: el antivirus puede estar bloqueando la comunicación.'],
+   ref:{normal:'TX: pulsos durante comunicación · COM port visible en Windows',warning:'COM port aparece pero no conecta',fault:'No aparece COM port → driver no instalado o cable dañado'}},
+];
+
+const AI_SYSTEM = `Eres el asistente técnico especializado en la controladora Enpower/Inpower MC3336-7240. Es un controlador AC de motor de inducción asíncrono, 72V, 400A, 15kW, con control vectorial (FOC), certificación IP68. El software de diagnóstico se llama "英搏尔SCI监视器 - Inpower".
+
+PARÁMETROS CLAVE:
+F0=Tipo motor (0=asíncrono), F2=Voltaje nominal, F3=Corriente nominal, F7=RPM máximas, F12=PPR encoder, F13=Dirección encoder (0=normal, 1=invertido), F15=Dirección de marcha (0=normal, 1=invertido), F21=Desaceleración libre (0=sin freno regenerativo - ⚠ actualmente 0), F35=KP magnetización (mínimo 100, valor actual 0 está fuera de rango), F41=Bajo voltaje corte (actual 63V), F42=Sobrevoltaje corte (actual 150), F46=Voltaje reducción potencia (actual 65V), F49=Corriente salida (lectura), F50=RPM (lectura), F51=Temp controlador (lectura), F52=Temp motor, F53=Voltaje batería ×0.1, F54=Código falla activa.
+
+CÓDIGOS DE PITIDO: 1=normal, 2=error acelerador, 3=falla IGBT, 4=sobretemperatura, 5=error encoder, 6=error fases motor, 1largo+3cortos=falla crítica módulo potencia, continuo=cortocircuito catastrófico.
+
+CORRECCIÓN DE DIRECCIÓN INVERTIDA: Primero cambiar F15, luego F13, como último recurso intercambiar dos fases físicamente (U↔V).
+
+VALORES ACTUALES DEL VEHÍCULO EN DIAGNÓSTICO: F1=7.5kW, F2=72V, F3=120A, F4=102Hz, F5=240Hz, F6=3060rpm, F7=4900rpm, F12=64PPR, F15=1, F21=0, F35=0, F41=63V, F42=150, F46=65V, Firmware=509.
+
+Responde siempre en español, de forma técnica y concisa. Da pasos concretos, valores de referencia precisos y advertencias de seguridad cuando aplique. Cuando el usuario describe síntomas, haz preguntas de diagnóstico enfocadas y concretas.`;
+
+const GRP_STYLE = {
+  F0: { bg:'#E1F5EE', color:'#0F6E56' },
+  F1: { bg:'#E6F1FB', color:'#185FA5' },
+  F2: { bg:'#EEEDFE', color:'#3C3489' },
+  F3: { bg:'#F1EFE8', color:'#5F5E5A' },
+};
+
+const SEV_STYLE = {
+  ok:       { bg:'#EAF3DE', color:'#3B6D11', label:'Normal',      icon:'✓' },
+  warning:  { bg:'#FAEEDA', color:'#854F0B', label:'Advertencia', icon:'⚠' },
+  critical: { bg:'#FCEBEB', color:'#791F1F', label:'Crítico',     icon:'✕' },
+  info:     { bg:'#E6F1FB', color:'#185FA5', label:'Info',        icon:'i' },
+};
+
+function Badge({ bg, color, children }) {
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', padding:'2px 8px', borderRadius:10, fontSize:11, fontWeight:500, background:bg, color }}>
+      {children}
+    </span>
+  );
+}
+
+function BeepWave({ pattern }) {
+  let x = 6;
+  const bw = 11, gap = 8, sh = 18, sy = 9;
+  return (
+    <svg width={160} height={36} aria-hidden="true" style={{ flexShrink:0 }}>
+      <line x1={0} y1={18} x2={160} y2={18} stroke="#e5e7eb" strokeWidth={0.5}/>
+      {pattern.map((w, i) => {
+        const width = w > 1 ? w * bw : bw;
+        const rect = <rect key={i} x={x} y={sy} width={width} height={sh} rx={2} fill="#1D9E75"/>;
+        x += width + gap;
+        return rect;
+      })}
+    </svg>
+  );
+}
+
+function ParamsTab() {
+  const [search, setSearch] = useState('');
+  const [grp, setGrp] = useState('');
+  const [expanded, setExpanded] = useState(null);
+
+  const filtered = PARAMS.filter(p => {
+    if (grp && p.grp !== grp) return false;
+    const s = search.toLowerCase();
+    return !s || p.id.toLowerCase().includes(s) || p.name.toLowerCase().includes(s) || p.desc.toLowerCase().includes(s);
+  });
+
+  return (
+    <div style={{ padding:16 }}>
+      <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+        <input type="text" placeholder="Buscar parámetro..." value={search} onChange={e => setSearch(e.target.value)}
+          style={{ flex:1, minWidth:150, padding:'7px 10px', border:'0.5px solid #d1d5db', borderRadius:8, fontSize:13, outline:'none' }}/>
+        <select value={grp} onChange={e => setGrp(e.target.value)}
+          style={{ padding:'7px 10px', border:'0.5px solid #d1d5db', borderRadius:8, fontSize:13, outline:'none', background:'white' }}>
+          <option value="">Todos los grupos</option>
+          <option value="F0">Grupo F0 — Motor</option>
+          <option value="F1">Grupo F1 — Aceleración</option>
+          <option value="F2">Grupo F2 — Torque/Protección</option>
+          <option value="F3">Grupo F3 — Monitoreo</option>
+        </select>
+      </div>
+      <div style={{ border:'0.5px solid #e5e7eb', borderRadius:10, overflow:'hidden' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'52px 1fr 90px 80px', padding:'8px 12px', background:'#f9fafb', borderBottom:'0.5px solid #e5e7eb' }}>
+          {['ID','Nombre','Rango','Modo'].map(h => (
+            <span key={h} style={{ fontSize:11, fontWeight:500, color:'#6b7280' }}>{h}</span>
+          ))}
+        </div>
+        {filtered.length === 0
+          ? <div style={{ padding:20, textAlign:'center', color:'#9ca3af', fontSize:13 }}>Sin resultados</div>
+          : filtered.map(p => (
+            <div key={p.id} style={{ borderBottom:'0.5px solid #f3f4f6' }}>
+              <div onClick={() => setExpanded(expanded === p.id ? null : p.id)}
+                style={{ display:'grid', gridTemplateColumns:'52px 1fr 90px 80px', padding:'9px 12px', alignItems:'center', cursor:'pointer', background: expanded===p.id ? '#f0fdf4' : 'white', transition:'background .1s' }}>
+                <span style={{ fontFamily:'monospace', fontSize:12, fontWeight:500, color: p.warn ? '#b45309' : '#111827' }}>
+                  {p.warn ? '⚠ ' : ''}{p.id}
+                </span>
+                <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+                  <span style={{ fontSize:13 }}>{p.name}</span>
+                  <Badge bg={GRP_STYLE[p.grp].bg} color={GRP_STYLE[p.grp].color}>{p.grp}</Badge>
+                </div>
+                <span style={{ fontFamily:'monospace', fontSize:11, color:'#6b7280' }}>{p.range}</span>
+                <Badge bg={p.ro ? '#f3f4f6' : '#d1fae5'} color={p.ro ? '#6b7280' : '#065f46'}>
+                  {p.ro ? '👁 Lectura' : '✏ Editable'}
+                </Badge>
+              </div>
+              {expanded === p.id && (
+                <div style={{ padding:'12px 16px', background:'#f9fafb', borderTop:'0.5px solid #e5e7eb' }}>
+                  <p style={{ fontSize:12, color:'#6b7280', marginBottom:8, lineHeight:1.6 }}>{p.desc}</p>
+                  <div style={{ borderLeft:`2px solid ${p.warn ? '#f59e0b' : '#1D9E75'}`, paddingLeft:8, fontSize:12, lineHeight:1.6, marginBottom: p.note ? 8 : 0 }}>{p.eff}</div>
+                  {p.note && <p style={{ fontSize:11, color:'#6b7280', fontFamily:'monospace', marginTop:6 }}>{p.note}</p>}
+                </div>
+              )}
+            </div>
+          ))
+        }
+      </div>
+      <p style={{ fontSize:11, color:'#9ca3af', marginTop:8 }}>Clic en cualquier parámetro para ver descripción completa y efecto de cambio.</p>
+    </div>
+  );
+}
+
+function BeepsTab() {
+  const [expanded, setExpanded] = useState(null);
+  return (
+    <div style={{ padding:16 }}>
+      <p style={{ fontSize:13, color:'#6b7280', marginBottom:14, lineHeight:1.5 }}>Los pitidos se emiten desde el buzzer del tablero al encender o al detectar una falla. La secuencia identifica el tipo de error.</p>
+      {BEEPS.map((b, i) => {
+        const s = SEV_STYLE[b.sev];
+        return (
+          <div key={i} style={{ border:'0.5px solid #e5e7eb', borderRadius:10, marginBottom:8, overflow:'hidden' }}>
+            <div onClick={() => setExpanded(expanded===i ? null : i)}
+              style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 14px', cursor:'pointer', background: expanded===i ? '#f9fafb' : 'white' }}>
+              <BeepWave pattern={b.pat}/>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:12, fontWeight:500, fontFamily:'monospace', marginBottom:2 }}>{b.seq}</div>
+                <div style={{ fontSize:12, color:'#4b5563', lineHeight:1.4 }}>{b.meaning}</div>
+              </div>
+              <Badge bg={s.bg} color={s.color}>{s.label}</Badge>
+              <span style={{ color:'#9ca3af', fontSize:12 }}>{expanded===i ? '▲' : '▼'}</span>
+            </div>
+            {expanded === i && (
+              <div style={{ padding:'12px 14px', borderTop:'0.5px solid #e5e7eb', background:'#f9fafb' }}>
+                <div style={{ fontSize:11, fontFamily:'monospace', color:'#9ca3af', marginBottom:6 }}>{b.fcode}</div>
+                <div style={{ fontSize:12, lineHeight:1.7, borderLeft:`2px solid ${s.color}`, paddingLeft:8 }}>{b.action}</div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ marginTop:10, padding:'10px 12px', background:'#eff6ff', borderRadius:8, fontSize:11, color:'#1d4ed8', lineHeight:1.5 }}>
+        ℹ Códigos basados en documentación de la serie MC3336 Inpower/Enpower y foros especializados. Verificar siempre con el manual físico de la unidad.
+      </div>
+    </div>
+  );
+}
+
+function FaultsTab() {
+  const [expanded, setExpanded] = useState(null);
+  const icons = { critical:'🔴', warning:'🟡', info:'🔵', ok:'🟢' };
+  return (
+    <div style={{ padding:16 }}>
+      <p style={{ fontSize:13, color:'#6b7280', marginBottom:14, lineHeight:1.5 }}>Cada falla incluye: pin de conexión, tipo de señal, valores de referencia y procedimiento de verificación paso a paso.</p>
+      {FAULTS.map(f => {
+        const s = SEV_STYLE[f.sev];
+        return (
+          <div key={f.id} style={{ border:'0.5px solid #e5e7eb', borderRadius:10, marginBottom:10, overflow:'hidden' }}>
+            <div onClick={() => setExpanded(expanded===f.id ? null : f.id)}
+              style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 14px', cursor:'pointer', background: expanded===f.id ? '#f9fafb' : 'white' }}>
+              <div style={{ width:32, height:32, borderRadius:8, background:s.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, flexShrink:0 }}>
+                {icons[f.sev]}
+              </div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13, fontWeight:500 }}>{f.name}</div>
+                <div style={{ fontSize:11, color:'#9ca3af', fontFamily:'monospace', marginTop:2 }}>{f.fcode}</div>
+              </div>
+              <Badge bg="#f3f4f6" color="#6b7280">{f.cat}</Badge>
+              <span style={{ color:'#9ca3af', fontSize:12 }}>{expanded===f.id ? '▲' : '▼'}</span>
+            </div>
+            {expanded === f.id && (
+              <div style={{ padding:16, borderTop:'0.5px solid #e5e7eb' }}>
+                <div style={{ fontSize:11, fontWeight:500, color:'#6b7280', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:8 }}>Pines y Señales</div>
+                {f.pins.map((p, i) => (
+                  <div key={i} style={{ border:'0.5px solid #e5e7eb', borderRadius:8, padding:'10px 12px', marginBottom:6 }}>
+                    <div style={{ fontFamily:'monospace', fontSize:12, fontWeight:500, marginBottom:6 }}>{p.pin}</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:6 }}>
+                      <div><div style={{ fontSize:10, color:'#9ca3af', marginBottom:2 }}>Señal</div><div style={{ fontSize:11 }}>{p.sig}</div></div>
+                      <div><div style={{ fontSize:10, color:'#9ca3af', marginBottom:2 }}>Referencia</div><div style={{ fontSize:11, color:'#1D9E75', fontFamily:'monospace' }}>{p.ref}</div></div>
+                    </div>
+                    <div style={{ fontSize:11, color:'#6b7280', borderTop:'0.5px solid #f3f4f6', paddingTop:6 }}>🔧 {p.test}</div>
+                  </div>
+                ))}
+                <div style={{ fontSize:11, fontWeight:500, color:'#6b7280', textTransform:'uppercase', letterSpacing:'.05em', margin:'14px 0 8px' }}>Procedimiento de Verificación</div>
+                {f.steps.map((step, i) => (
+                  <div key={i} style={{ display:'flex', gap:8, marginBottom:6 }}>
+                    <div style={{ minWidth:20, height:20, borderRadius:'50%', background:'#1D9E75', color:'white', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:500, flexShrink:0, marginTop:1 }}>{i+1}</div>
+                    <div style={{ fontSize:12, lineHeight:1.6 }}>{step}</div>
+                  </div>
+                ))}
+                <div style={{ background:'#f9fafb', borderRadius:8, padding:'10px 12px', marginTop:14 }}>
+                  <div style={{ fontSize:10, fontWeight:500, color:'#6b7280', marginBottom:6 }}>VALORES DE REFERENCIA</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+                    {[['Normal','#065f46',f.ref.normal],['Advertencia','#854F0B',f.ref.warning],['Falla','#7f1d1d',f.ref.fault]].map(([l,c,v]) => (
+                      <div key={l}><div style={{ fontSize:10, color:c, marginBottom:2 }}>{l}</div><div style={{ fontSize:11 }}>{v}</div></div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AITab() {
+  const SUGGESTIONS = ['F35=0, ¿qué significa?','Motor vibra a baja velocidad','Vehículo va en reversa al poner Forward','3 pitidos al encender','F53=792, ¿cuál es el voltaje real?','¿Qué parámetros revisar primero?'];
+  const [messages, setMessages] = useState([
+    { role:'assistant', content:'Hola. Soy el asistente especializado en la controladora Enpower MC3336-7240. Tengo precargados todos los parámetros y valores actuales del vehículo. Describe el síntoma o falla que estás diagnosticando.' }
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [dots, setDots] = useState('');
+  const logRef = useRef(null);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [messages, loading]);
+
+  useEffect(() => {
+    if (!loading) { setDots(''); return; }
+    const t = setInterval(() => setDots(d => d.length >= 3 ? '.' : d + '.'), 400);
+    return () => clearInterval(t);
+  }, [loading]);
+
+  async function send(msg) {
+    const text = (msg || input).trim();
+    if (!text || loading) return;
+    setInput('');
+    const newMsgs = [...messages, { role:'user', content:text }];
+    setMessages(newMsgs);
+    setLoading(true);
+    try {
+      const apiMsgs = newMsgs.slice(1).map(m => ({ role:m.role, content:m.content }));
+      const r = await fetch('/.netlify/functions/chat', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ system:AI_SYSTEM, messages:apiMsgs })
+      });
+      const d = await r.json();
+      const reply = d.content?.map(c => c.text || '').join('')
+        || (d.error?.message ? '⚠ ' + d.error.message : 'Error en la respuesta de la API.');
+      setMessages([...newMsgs, { role:'assistant', content:reply }]);
+    } catch {
+      setMessages([...newMsgs, { role:'assistant', content:'⚠ Error de conexión. Verificar acceso a internet e intentar nuevamente.' }]);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ padding:16 }}>
+      <div style={{ border:'0.5px solid #e5e7eb', borderRadius:10, overflow:'hidden' }}>
+        <div style={{ padding:'10px 14px', background:'#f9fafb', borderBottom:'0.5px solid #e5e7eb', display:'flex', alignItems:'center', gap:8 }}>
+          <div style={{ width:8, height:8, borderRadius:'50%', background:'#1D9E75' }}/>
+          <span style={{ fontSize:12, fontWeight:500 }}>IA Análisis — MC3336-7240</span>
+          <span style={{ fontSize:11, color:'#9ca3af', marginLeft:'auto' }}>claude-sonnet-4-6</span>
+        </div>
+        <div ref={logRef} style={{ minHeight:320, maxHeight:380, overflowY:'auto', padding:14, display:'flex', flexDirection:'column', gap:8 }}>
+          {messages.map((m, i) => (
+            <div key={i} style={{ maxWidth:'90%', alignSelf: m.role==='user' ? 'flex-end' : 'flex-start' }}>
+              {m.role==='assistant' && <div style={{ fontSize:11, color:'#1D9E75', fontWeight:500, marginBottom:3 }}>EVtronics IA</div>}
+              <div style={{ padding:'10px 13px', borderRadius:10, fontSize:13, lineHeight:1.7, background: m.role==='user' ? '#dbeafe' : '#f3f4f6', color: m.role==='user' ? '#1e3a8a' : '#111827', whiteSpace:'pre-wrap' }}>
+                {m.content}
+              </div>
+            </div>
+          ))}
+          {loading && (
+            <div style={{ alignSelf:'flex-start' }}>
+              <div style={{ fontSize:11, color:'#1D9E75', fontWeight:500, marginBottom:3 }}>EVtronics IA</div>
+              <div style={{ padding:'10px 13px', borderRadius:10, background:'#f3f4f6', fontSize:13, color:'#6b7280' }}>Analizando{dots}</div>
+            </div>
+          )}
+        </div>
+        <div style={{ padding:'10px 14px', borderTop:'0.5px solid #e5e7eb', display:'flex', gap:8, alignItems:'flex-end' }}>
+          <textarea value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }}}
+            rows={2} placeholder="Describe el síntoma o falla... (Enter para enviar)"
+            style={{ flex:1, padding:'8px 12px', border:'0.5px solid #d1d5db', borderRadius:8, fontSize:13, resize:'none', outline:'none', fontFamily:'inherit', lineHeight:1.5 }}/>
+          <button onClick={() => send()} disabled={loading}
+            style={{ padding:'8px 16px', background: loading ? '#9ca3af' : '#1D9E75', border:'none', borderRadius:8, color:'white', cursor: loading ? 'not-allowed' : 'pointer', fontSize:13, height:36, flexShrink:0, fontWeight:500 }}>
+            ↑ Enviar
+          </button>
+        </div>
+      </div>
+      <div style={{ marginTop:12 }}>
+        <div style={{ fontSize:11, color:'#6b7280', marginBottom:6 }}>Preguntas rápidas:</div>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+          {SUGGESTIONS.map(q => (
+            <button key={q} onClick={() => send(q)}
+              style={{ padding:'4px 10px', border:'0.5px solid #d1d5db', borderRadius:16, background:'white', fontSize:11, cursor:'pointer', color:'#374151' }}>
+              {q}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const TABS = [
+  { id:'params', label:'Parámetros',       icon:'⚙' },
+  { id:'beeps',  label:'Códigos de Pitido', icon:'🔊' },
+  { id:'faults', label:'Diagnóstico',       icon:'🔍' },
+  { id:'ai',     label:'IA Análisis',       icon:'🤖' },
+];
+
+function App() {
+  const [tab, setTab] = useState('params');
+  return (
+    <div style={{ fontFamily:'system-ui, sans-serif', color:'#111827', maxWidth:'100%' }}>
+      <div style={{ padding:'14px 16px 0', borderBottom:'0.5px solid #e5e7eb' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
+          <div style={{ width:30, height:30, background:'#1D9E75', borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:16, flexShrink:0 }}>⚡</div>
+          <div>
+            <div style={{ fontSize:15, fontWeight:500 }}>EVtronics <span style={{ color:'#1D9E75' }}>Enpower</span></div>
+            <div style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace' }}>MC3336-7240 · 72V · 400A · AC Vectorial · IP68</div>
+          </div>
+        </div>
+        <div style={{ display:'flex', overflowX:'auto' }}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              style={{ padding:'9px 14px', border:'none', background:'transparent', cursor:'pointer', fontSize:12, fontWeight: tab===t.id ? 500 : 400, color: tab===t.id ? '#1D9E75' : '#6b7280', borderBottom:`2px solid ${tab===t.id ? '#1D9E75' : 'transparent'}`, whiteSpace:'nowrap', transition:'all .15s' }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {tab === 'params' && <ParamsTab/>}
+      {tab === 'beeps'  && <BeepsTab/>}
+      {tab === 'faults' && <FaultsTab/>}
+      {tab === 'ai'     && <AITab/>}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+  </script>
+</body>
+</html>
