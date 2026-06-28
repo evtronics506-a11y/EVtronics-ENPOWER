@@ -359,7 +359,7 @@ function FaultsTab() {
   );
 }
 
-function AITab() {
+function AITab({ pw }) {
   const SUGGESTIONS = ['F35=0, ¿qué significa?','Motor vibra a baja velocidad','Vehículo va en reversa al poner Forward','3 pitidos al encender','F53=792, ¿cuál es el voltaje real?','¿Qué parámetros revisar primero?'];
   const [messages, setMessages] = useState([
     { role:'assistant', content:'Hola. Soy el asistente especializado en la controladora Enpower MC3336-7240. Tengo precargados todos los parámetros y valores actuales del vehículo. Describe el síntoma o falla que estás diagnosticando.' }
@@ -391,7 +391,7 @@ function AITab() {
       const r = await fetch('/.netlify/functions/chat', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ system:AI_SYSTEM, messages:apiMsgs })
+        body: JSON.stringify({ system:AI_SYSTEM, messages:apiMsgs, password:pw })
       });
       const d = await r.json();
       const reply = d.content?.map(c => c.text || '').join('')
@@ -453,6 +453,53 @@ function AITab() {
   );
 }
 
+function Login({ onAuth }) {
+  const [pw, setPw] = useState('');
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function submit() {
+    if (!pw.trim() || loading) return;
+    setLoading(true);
+    setErr('');
+    try {
+      const r = await fetch('/.netlify/functions/chat', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ verify:true, password:pw })
+      });
+      if (r.ok) {
+        try { localStorage.setItem('ev_pw', pw); } catch (e) {}
+        onAuth(pw);
+      } else {
+        setErr('Contraseña incorrecta.');
+      }
+    } catch (e) {
+      setErr('Error de conexión. Intentá de nuevo.');
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ fontFamily:'system-ui, sans-serif', minHeight:'80vh', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ width:'100%', maxWidth:320, textAlign:'center' }}>
+        <div style={{ width:48, height:48, background:'#1D9E75', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:24, margin:'0 auto 16px' }}>⚡</div>
+        <div style={{ fontSize:18, fontWeight:600, marginBottom:4 }}>EVtronics Enpower</div>
+        <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>Ingresá la contraseña para acceder</div>
+        <input type="password" value={pw} onChange={e => setPw(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          placeholder="Contraseña"
+          style={{ width:'100%', padding:'10px 12px', border:'0.5px solid #d1d5db', borderRadius:8, fontSize:14, outline:'none', marginBottom:10 }}/>
+        <button onClick={submit} disabled={loading}
+          style={{ width:'100%', padding:'10px', background: loading ? '#9ca3af' : '#1D9E75', border:'none', borderRadius:8, color:'white', fontSize:14, fontWeight:500, cursor: loading ? 'not-allowed' : 'pointer' }}>
+          {loading ? 'Verificando…' : 'Entrar'}
+        </button>
+        {err && <div style={{ marginTop:10, fontSize:12, color:'#b91c1c' }}>{err}</div>}
+      </div>
+    </div>
+  );
+}
+
 const TABS = [
   { id:'params', label:'Parámetros',       icon:'⚙' },
   { id:'beeps',  label:'Códigos de Pitido', icon:'🔊' },
@@ -462,15 +509,31 @@ const TABS = [
 
 function App() {
   const [tab, setTab] = useState('params');
+  const [pw, setPw] = useState(() => { try { return localStorage.getItem('ev_pw') || ''; } catch (e) { return ''; } });
+  const [authed, setAuthed] = useState(() => { try { return !!localStorage.getItem('ev_pw'); } catch (e) { return false; } });
+
+  function logout() {
+    try { localStorage.removeItem('ev_pw'); } catch (e) {}
+    setPw(''); setAuthed(false);
+  }
+
+  if (!authed) {
+    return <Login onAuth={(p) => { setPw(p); setAuthed(true); }} />;
+  }
+
   return (
     <div style={{ fontFamily:'system-ui, sans-serif', color:'#111827', maxWidth:'100%' }}>
       <div style={{ padding:'14px 16px 0', borderBottom:'0.5px solid #e5e7eb' }}>
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
           <div style={{ width:30, height:30, background:'#1D9E75', borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:16, flexShrink:0 }}>⚡</div>
-          <div>
+          <div style={{ flex:1 }}>
             <div style={{ fontSize:15, fontWeight:500 }}>EVtronics <span style={{ color:'#1D9E75' }}>Enpower</span></div>
             <div style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace' }}>MC3336-7240 · 72V · 400A · AC Vectorial · IP68</div>
           </div>
+          <button onClick={logout} title="Salir"
+            style={{ border:'0.5px solid #e5e7eb', background:'white', color:'#6b7280', borderRadius:8, padding:'5px 10px', fontSize:11, cursor:'pointer', flexShrink:0 }}>
+            Salir
+          </button>
         </div>
         <div style={{ display:'flex', overflowX:'auto' }}>
           {TABS.map(t => (
@@ -484,7 +547,7 @@ function App() {
       {tab === 'params' && <ParamsTab/>}
       {tab === 'beeps'  && <BeepsTab/>}
       {tab === 'faults' && <FaultsTab/>}
-      {tab === 'ai'     && <AITab/>}
+      {tab === 'ai'     && <AITab pw={pw}/>}
     </div>
   );
 }
